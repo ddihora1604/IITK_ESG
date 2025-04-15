@@ -1,0 +1,8 @@
+yfinance
+pandas
+requests
+tqdm
+xlsxwriter
+beautifulsoup4
+lxml
+python-dateutil
