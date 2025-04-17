@@ -49,8 +49,9 @@ class StockAnalyzer:
             
             # Execute tasks in specific order to maintain sheet order
             self.fetch_historical_data()  # First sheet
-            self.fetch_company_summary()  # Second sheet
-            self.fetch_statistics()       # Third sheet - ensure it comes right after Company Summary
+            self.fetch_esg_data()         # Second sheet (adding ESG data right after historical data)
+            self.fetch_company_summary()  # Third sheet
+            self.fetch_statistics()       # Fourth sheet
             
             # Create remaining tasks for concurrent execution
             tasks = [
@@ -129,9 +130,314 @@ class StockAnalyzer:
             pd.DataFrame({"Error": [str(e)]}).to_excel(self.writer, sheet_name='Historical Data')
 
     def fetch_esg_data(self):
-        """Fetch and populate ESG scores for the last 5 years"""
-        # This function is temporarily commented out
-        pass
+        """Fetch and populate ESG scores from Yahoo Finance ESG Chart API"""
+        try:
+            print(f"Fetching ESG data for {self.ticker_symbol}...")
+            
+            # Browser-like headers to avoid 401 errors
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Connection': 'keep-alive',
+                'Referer': f'https://finance.yahoo.com/quote/{self.ticker_symbol}/sustainability',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'same-origin',
+                'Sec-Fetch-User': '?1',
+                'Upgrade-Insecure-Requests': '1',
+                'Cache-Control': 'max-age=0'
+            }
+            
+            # First try - directly fetch the ESG data using simple esgChart API
+            url_chart = "https://query2.finance.yahoo.com/v1/finance/esgChart"
+            params = {"symbol": self.ticker_symbol}
+            
+            esg_series = None
+            esg_components = {
+                "totalEsg": None,
+                "environment": None,
+                "social": None, 
+                "governance": None,
+                "controversyLevel": None
+            }
+            
+            try:
+                response_chart = requests.get(url_chart, headers=headers, params=params, timeout=10)
+                if response_chart.ok:
+                    chart_data = response_chart.json()
+                    if "esgChart" in chart_data and "result" in chart_data["esgChart"] and chart_data["esgChart"]["result"]:
+                        result = chart_data["esgChart"]["result"][0]
+                        if "symbolSeries" in result:
+                            esg_series = result["symbolSeries"]
+                        
+                        # Try getting component scores
+                        if "instrumentInfo" in result and "esgScores" in result["instrumentInfo"]:
+                            scores = result["instrumentInfo"]["esgScores"]
+                            
+                            if "totalEsg" in scores and "raw" in scores["totalEsg"]:
+                                esg_components["totalEsg"] = scores["totalEsg"]["raw"]
+                            
+                            if "environmentScore" in scores and "raw" in scores["environmentScore"]:
+                                esg_components["environment"] = scores["environmentScore"]["raw"]
+                            
+                            if "socialScore" in scores and "raw" in scores["socialScore"]:
+                                esg_components["social"] = scores["socialScore"]["raw"]
+                            
+                            if "governanceScore" in scores and "raw" in scores["governanceScore"]:
+                                esg_components["governance"] = scores["governanceScore"]["raw"]
+                            
+                            if "controversyLevel" in scores:
+                                esg_components["controversyLevel"] = scores["controversyLevel"]
+            except Exception as e:
+                print(f"Error fetching ESG chart data: {str(e)}")
+            
+            # If we couldn't get the data from the first endpoint, try a second approach
+            if not esg_series:
+                print("Trying alternative ESG data source...")
+                try:
+                    # Direct web scraping approach from sustainability page
+                    url = f"https://finance.yahoo.com/quote/{self.ticker_symbol}/sustainability"
+                    response = requests.get(url, headers=headers, timeout=15)
+                    
+                    if response.ok:
+                        from bs4 import BeautifulSoup
+                        soup = BeautifulSoup(response.text, 'lxml')
+                        
+                        # Look for ESG scores in the page content
+                        # First try to find embedded JSON data which often contains the ESG scores
+                        scripts = soup.find_all('script')
+                        for script in scripts:
+                            script_text = script.string
+                            if script_text and 'root.App.main' in script_text:
+                                import re
+                                import json
+                                
+                                json_data = None
+                                json_pattern = re.compile(r'root\.App\.main\s*=\s*(\{.*\})\s*;', re.DOTALL)
+                                matches = json_pattern.findall(script_text)
+                                
+                                if matches:
+                                    try:
+                                        json_data = json.loads(matches[0])
+                                        context = json_data.get('context', {})
+                                        dispatcher = context.get('dispatcher', {})
+                                        stores = dispatcher.get('stores', {})
+                                        
+                                        if 'QuoteSummaryStore' in stores:
+                                            summary_store = stores['QuoteSummaryStore']
+                                            if 'esgScores' in summary_store:
+                                                esg_data = summary_store['esgScores']
+                                                
+                                                # Extract the ESG scores
+                                                if 'totalEsg' in esg_data and 'raw' in esg_data['totalEsg']:
+                                                    esg_components["totalEsg"] = esg_data['totalEsg']['raw']
+                                                
+                                                if 'environmentScore' in esg_data and 'raw' in esg_data['environmentScore']:
+                                                    esg_components["environment"] = esg_data['environmentScore']['raw']
+                                                
+                                                if 'socialScore' in esg_data and 'raw' in esg_data['socialScore']:
+                                                    esg_components["social"] = esg_data['socialScore']['raw']
+                                                
+                                                if 'governanceScore' in esg_data and 'raw' in esg_data['governanceScore']:
+                                                    esg_components["governance"] = esg_data['governanceScore']['raw']
+                                                
+                                                if 'controversyLevel' in esg_data:
+                                                    esg_components["controversyLevel"] = esg_data['controversyLevel']
+                                            
+                                            # If we don't have historical data yet, try to get it
+                                            if not esg_series and 'esgChart' in summary_store:
+                                                esg_chart = summary_store['esgChart']
+                                                if 'result' in esg_chart and esg_chart['result'] and 'symbolSeries' in esg_chart['result'][0]:
+                                                    esg_series = esg_chart['result'][0]['symbolSeries']
+                                    except Exception as e:
+                                        print(f"Error parsing embedded JSON: {str(e)}")
+                        
+                        # If we still don't have the data, try to find it directly in the HTML
+                        if not esg_components["totalEsg"]:
+                            # Look for ESG score elements
+                            esg_elements = soup.select('div[data-test="esg-score"]')
+                            for element in esg_elements:
+                                try:
+                                    score_text = element.get_text().strip()
+                                    if score_text.isdigit() or (score_text.replace('.', '', 1).isdigit() and score_text.count('.') <= 1):
+                                        esg_components["totalEsg"] = float(score_text)
+                                        break
+                                except:
+                                    pass
+                            
+                            # Try to find environmental score
+                            env_elements = soup.select('div[data-test="environment-score"], div:contains("Environment")')
+                            for element in env_elements:
+                                try:
+                                    score_text = element.get_text().strip()
+                                    # Extract numeric part
+                                    import re
+                                    numbers = re.findall(r'\b\d+\b', score_text)
+                                    if numbers:
+                                        esg_components["environment"] = float(numbers[0])
+                                        break
+                                except:
+                                    pass
+                            
+                            # Similar approach for social and governance
+                            # This is simplified - in a real implementation you'd need more robust parsing
+                except Exception as e:
+                    print(f"Error with alternative ESG data source: {str(e)}")
+            
+            # If we still don't have the data, try our third approach
+            if not esg_series or all(v is None for v in esg_components.values()):
+                print("Trying third ESG data source...")
+                
+                # Use yfinance's built-in sustainability method
+                try:
+                    sustainability = self.ticker.sustainability
+                    if sustainability is not None and not sustainability.empty:
+                        # Extract what we can from yfinance
+                        for col in ['totalEsg', 'environmentScore', 'socialScore', 'governanceScore']:
+                            if col in sustainability.columns:
+                                # Map to our keys
+                                key = col
+                                if col == 'environmentScore':
+                                    key = 'environment'
+                                elif col == 'socialScore':
+                                    key = 'social'
+                                elif col == 'governanceScore':
+                                    key = 'governance'
+                                
+                                if sustainability.iloc[0][col] and pd.notna(sustainability.iloc[0][col]):
+                                    esg_components[key] = float(sustainability.iloc[0][col])
+                except Exception as e:
+                    print(f"Error with yfinance sustainability data: {str(e)}")
+            
+            # If after all attempts we still don't have ESG series data, create some placeholder data
+            if not esg_series:
+                # If we at least have a total ESG score, we can create a simple series with just today's date
+                if esg_components["totalEsg"] is not None:
+                    current_timestamp = int(time.time())
+                    esg_series = [{"timestamp": current_timestamp, "esgScore": esg_components["totalEsg"]}]
+                else:
+                    # Handle the case where we have no ESG data at all
+                    raise Exception("No ESG data available for this ticker after multiple attempts")
+            
+            # Convert to DataFrame for historical data
+            df = pd.DataFrame(esg_series)
+            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s")
+            df["date"] = df["timestamp"].dt.strftime('%d-%m-%Y')
+            
+            # Sort by date descending
+            df = df.sort_values("timestamp", ascending=False)
+            
+            # For each date in our historical ESG data, store the real-time E, S, G component values
+            # Since Yahoo doesn't provide historical E, S, G values, we use the current values for all dates
+            data_source = "Current values (historical components not available)"
+            if all(esg_components[k] is not None for k in ["environment", "social", "governance"]):
+                df["E_Score"] = esg_components["environment"]
+                df["S_Score"] = esg_components["social"]
+                df["G_Score"] = esg_components["governance"]
+            else:
+                # If we don't have all component scores, use what we have and estimate the rest
+                df["E_Score"] = esg_components["environment"] if esg_components["environment"] is not None else df["esgScore"] * 0.33
+                df["S_Score"] = esg_components["social"] if esg_components["social"] is not None else df["esgScore"] * 0.33
+                df["G_Score"] = esg_components["governance"] if esg_components["governance"] is not None else df["esgScore"] * 0.33
+                data_source = "Partially estimated values (some components not available)"
+            
+            # Add a note about the data source
+            df["Data_Source"] = data_source
+            
+            # Convert the DataFrame to Excel
+            df_excel = df[["date", "esgScore", "E_Score", "S_Score", "G_Score"]].copy()
+            df_excel.columns = ["Date", "ESG Score", "Environmental", "Social", "Governance"]
+            df_excel.set_index("Date", inplace=True)
+            
+            # Write to Excel file after Historical Data sheet
+            df_excel.to_excel(self.writer, sheet_name='ESG Scores')
+            
+            # Get the worksheet
+            worksheet = self.writer.sheets['ESG Scores']
+            workbook = self.writer.book
+            
+            # Format the worksheet
+            # Header format
+            header_format = workbook.add_format({
+                'bold': True,
+                'font_size': 12,
+                'bg_color': '#D3D3D3',
+                'align': 'center',
+                'valign': 'vcenter',
+                'border': 1
+            })
+            
+            # Date format
+            date_format = workbook.add_format({
+                'num_format': 'dd-mm-yyyy',
+                'align': 'center',
+                'border': 1
+            })
+            
+            # Value format
+            value_format = workbook.add_format({
+                'align': 'center',
+                'border': 1,
+                'num_format': '0.00'
+            })
+            
+            # Note format for data source explanation
+            note_format = workbook.add_format({
+                'italic': True,
+                'font_size': 10,
+                'align': 'left',
+                'text_wrap': True
+            })
+            
+            # Apply header format
+            worksheet.set_row(0, None, header_format)
+            
+            # Apply date format to date column
+            worksheet.set_column('A:A', 15, date_format)
+            
+            # Apply value format to ESG score and component columns
+            worksheet.set_column('B:E', 15, value_format)
+            
+            # Add a data source note at the top
+            note_row = len(df_excel) + 2
+            worksheet.merge_range(note_row, 0, note_row, 4, f"Note: {data_source}", note_format)
+            
+            # Add a summary section for latest ESG component scores
+            if any(esg_components[k] is not None for k in ["totalEsg", "environment", "social", "governance"]):
+                # Add a header for the summary section
+                summary_row = note_row + 2
+                worksheet.merge_range(summary_row, 0, summary_row, 4, "Latest ESG Component Scores", header_format)
+                
+                # Component score format
+                component_header_format = workbook.add_format({
+                    'bold': True,
+                    'align': 'left',
+                    'border': 1
+                })
+                
+                # Add component scores
+                components = [
+                    ("Total ESG Score", esg_components.get("totalEsg", "N/A")),
+                    ("Environmental Score", esg_components.get("environment", "N/A")),
+                    ("Social Score", esg_components.get("social", "N/A")),
+                    ("Governance Score", esg_components.get("governance", "N/A")),
+                    ("Controversy Level", esg_components.get("controversyLevel", "N/A"))
+                ]
+                
+                for i, (component, score) in enumerate(components):
+                    worksheet.write(summary_row + i + 1, 0, component, component_header_format)
+                    worksheet.write(summary_row + i + 1, 1, score, value_format)
+                
+            print(f"ESG data for {self.ticker_symbol} fetched successfully.")
+            
+        except Exception as e:
+            print(f"Error fetching ESG data: {str(e)}")
+            # Create a simple error sheet
+            pd.DataFrame({"Error": [f"Could not fetch ESG data: {str(e)}"]}).to_excel(
+                self.writer, sheet_name='ESG Scores'
+            )
 
     def _get_esg_from_multiple_sources(self):
         """Try multiple sources to get ESG data"""
@@ -3697,10 +4003,23 @@ class StockAnalyzer:
             return None
 
 async def main():
-    ticker_symbol = input("Enter stock ticker symbol (e.g., AAPL): ").upper()
+    print("\n=== Stock Analysis Tool with ESG Data ===")
+    print("This tool fetches financial data, historical prices, and ESG scores for any ticker symbol.")
+    ticker_symbol = input("\nEnter stock ticker symbol (e.g., AAPL, MSFT, GOOGL): ").strip().upper()
+    
+    if not ticker_symbol:
+        print("No ticker symbol entered. Using default: AAPL")
+        ticker_symbol = "AAPL"
+    
+    print(f"\nAnalyzing {ticker_symbol}...")
     analyzer = StockAnalyzer(ticker_symbol)
     output_file = await analyzer.fetch_all_data()
-    print(f"\nProcess complete!")
+    
+    if output_file:
+        print(f"\nProcess complete! Data saved to: {output_file}")
+        print("The ESG Scores are available in the 'ESG Scores' sheet.")
+    else:
+        print("\nAn error occurred during data fetching.")
 
 if __name__ == "__main__":
     asyncio.run(main())
