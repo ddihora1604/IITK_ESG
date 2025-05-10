@@ -30,7 +30,6 @@ class StockAnalyzer:
 
     async def fetch_all_data(self):
         """Main async method to fetch all data concurrently"""
-        print(f"\nFetching data for {self.ticker_symbol}...")
         
         try:
             # Check if file is accessible
@@ -127,12 +126,12 @@ class StockAnalyzer:
             worksheet.set_row(0, None, header_format)
             
         except Exception as e:
+            print(f"Error in Historical Data sheet: {str(e)}")
             pd.DataFrame({"Error": [str(e)]}).to_excel(self.writer, sheet_name='Historical Data')
 
     def fetch_esg_data(self):
         """Fetch and populate ESG scores from Yahoo Finance ESG Chart API"""
         try:
-            print(f"Fetching ESG data for {self.ticker_symbol}...")
             
             # Browser-like headers to avoid 401 errors
             headers = {
@@ -165,6 +164,8 @@ class StockAnalyzer:
             
             try:
                 response_chart = requests.get(url_chart, headers=headers, params=params, timeout=10)
+                if response_chart.status_code == 429:
+                    raise Exception('Rate limited (HTTP 429): Too Many Requests. Try after a while.')
                 if response_chart.ok:
                     chart_data = response_chart.json()
                     if "esgChart" in chart_data and "result" in chart_data["esgChart"] and chart_data["esgChart"]["result"]:
@@ -195,12 +196,13 @@ class StockAnalyzer:
             
             # If we couldn't get the data from the first endpoint, try a second approach
             if not esg_series:
-                print("Trying alternative ESG data source...")
+                
                 try:
                     # Direct web scraping approach from sustainability page
                     url = f"https://finance.yahoo.com/quote/{self.ticker_symbol}/sustainability"
                     response = requests.get(url, headers=headers, timeout=15)
-                    
+                    if response.status_code == 429:
+                        raise Exception('Rate limited (HTTP 429): Too Many Requests. Try after a while.')
                     if response.ok:
                         from bs4 import BeautifulSoup
                         soup = BeautifulSoup(response.text, 'lxml')
@@ -288,7 +290,6 @@ class StockAnalyzer:
             
             # If we still don't have the data, try our third approach
             if not esg_series or all(v is None for v in esg_components.values()):
-                print("Trying third ESG data source...")
                 
                 # Use yfinance's built-in sustainability method
                 try:
@@ -433,7 +434,7 @@ class StockAnalyzer:
             print(f"ESG data for {self.ticker_symbol} fetched successfully.")
             
         except Exception as e:
-            print(f"Error fetching ESG data: {str(e)}")
+            print(f"Error in ESG Scores sheet: {str(e)}")
             # Create a simple error sheet
             pd.DataFrame({"Error": [f"Could not fetch ESG data: {str(e)}"]}).to_excel(
                 self.writer, sheet_name='ESG Scores'
@@ -476,9 +477,8 @@ class StockAnalyzer:
             }
             
             response = requests.get(url, headers=headers, timeout=15)
-            
-            if response.status_code != 200:
-                raise Exception(f"Failed to fetch income statement data (Status Code: {response.status_code})")
+            if response.status_code == 429:
+                raise Exception('Rate limited (HTTP 429): Too Many Requests. Try after a while.')
             
             html_content = response.text
             
@@ -1083,7 +1083,7 @@ class StockAnalyzer:
                         worksheet.set_row(i, None, alt_row_format)
             
         except Exception as e:
-            print(f"Error in fetch_statistics: {str(e)}")
+            print(f"Error in Statistics sheet: {str(e)}")
             pd.DataFrame({"Error": [str(e)]}).to_excel(self.writer, sheet_name='Statistics')
 
     def _scrape_yahoo_finance(self, ticker_symbol):
@@ -1095,6 +1095,8 @@ class StockAnalyzer:
             }
             
             response = requests.get(url, headers=headers, timeout=10)
+            if response.status_code == 429:
+                raise Exception('Rate limited (HTTP 429): Too Many Requests. Try after a while.')
             
             if response.status_code != 200:
                 print(f"Failed to access Yahoo Finance website, status code: {response.status_code}")
@@ -1257,6 +1259,8 @@ class StockAnalyzer:
             }
             
             response = requests.get(url, headers=headers, timeout=10)
+            if response.status_code == 429:
+                raise Exception('Rate limited (HTTP 429): Too Many Requests. Try after a while.')
             
             if response.status_code != 200:
                 return {}
@@ -1331,6 +1335,8 @@ class StockAnalyzer:
             try:
                 analyst_url = f"https://finance.yahoo.com/quote/{ticker_symbol}/analysis"
                 analyst_response = requests.get(analyst_url, headers=headers, timeout=10)
+                if analyst_response.status_code == 429:
+                    raise Exception('Rate limited (HTTP 429): Too Many Requests. Try after a while.')
                 
                 if analyst_response.status_code == 200:
                     analyst_soup = BeautifulSoup(analyst_response.text, 'lxml')
@@ -2154,6 +2160,8 @@ class StockAnalyzer:
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
                     }
                     response = requests.get(url, headers=headers, timeout=10)
+                    if response.status_code == 429:
+                        raise Exception('Rate limited (HTTP 429): Too Many Requests. Try after a while.')
                     if response.status_code == 200:
                         soup = BeautifulSoup(response.text, 'lxml')
                         
@@ -2364,6 +2372,8 @@ class StockAnalyzer:
             }
             
             response = requests.get(url, headers=headers, timeout=15)
+            if response.status_code == 429:
+                raise Exception('Rate limited (HTTP 429): Too Many Requests. Try after a while.')
             
             if response.status_code == 200:
                 soup = BeautifulSoup(response.text, 'lxml')
@@ -2616,6 +2626,8 @@ class StockAnalyzer:
             
             try:
                 response = requests.get(url, headers=headers, timeout=15)
+                if response.status_code == 429:
+                    raise Exception('Rate limited (HTTP 429): Too Many Requests. Try after a while.')
                 
                 if response.status_code == 200:
                     soup = BeautifulSoup(response.text, 'lxml')
@@ -3308,9 +3320,8 @@ class StockAnalyzer:
             }
             
             response = requests.get(url, headers=headers, timeout=15)
-            
-            if response.status_code != 200:
-                raise Exception(f"Failed to fetch balance sheet data (Status Code: {response.status_code})")
+            if response.status_code == 429:
+                raise Exception('Rate limited (HTTP 429): Too Many Requests. Try after a while.')
             
             html_content = response.text
             
@@ -3464,9 +3475,8 @@ class StockAnalyzer:
             }
             
             response = requests.get(url, headers=headers, timeout=15)
-            
-            if response.status_code != 200:
-                raise Exception(f"Failed to fetch cash flow data (Status Code: {response.status_code})")
+            if response.status_code == 429:
+                raise Exception('Rate limited (HTTP 429): Too Many Requests. Try after a while.')
             
             html_content = response.text
             
@@ -4003,8 +4013,6 @@ class StockAnalyzer:
             return None
 
 async def main():
-    print("\n=== Stock Analysis Tool with ESG Data ===")
-    print("This tool fetches financial data, historical prices, and ESG scores for any ticker symbol.")
     ticker_symbol = input("\nEnter stock ticker symbol (e.g., AAPL, MSFT, GOOGL): ").strip().upper()
     
     if not ticker_symbol:
@@ -4016,8 +4024,7 @@ async def main():
     output_file = await analyzer.fetch_all_data()
     
     if output_file:
-        print(f"\nProcess complete! Data saved to: {output_file}")
-        print("The ESG Scores are available in the 'ESG Scores' sheet.")
+        print(f"\nProcess complete!")
     else:
         print("\nAn error occurred during data fetching.")
 
